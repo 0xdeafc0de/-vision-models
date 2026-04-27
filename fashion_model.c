@@ -22,6 +22,7 @@
 #define OUTPUT_SIZE 10
 #define MAX_SAMPLES 70000
 #define NUM_ITERATIONS 50
+#define LOG_EVERY 5
 #define LEARNING_RATE 0.001
 #define LR_DECAY_RATE 1e-5
 #define L2_LAMBDA 0.0
@@ -42,6 +43,8 @@ const char *fashion_labels[] = {
     "T-shirt/top", "Trouser", "Pullover", "Dress", "Coat",
     "Sandal", "Shirt", "Sneaker", "Bag", "Ankle boot"
 };
+
+int predict(FashionModel *model, float *x);
 
 // ─────────────────────────────────────────────────────────────
 // Activation Functions
@@ -286,33 +289,75 @@ void shuffle_indices(int *indices, int n) {
 // Training
 // ─────────────────────────────────────────────────────────────
 
-void train_model(FashionModel *model, Dataset *dataset) {
-    int *indices = (int*)malloc(dataset->n_samples * sizeof(int));
-    for (int i = 0; i < dataset->n_samples; i++) indices[i] = i;
-    
-    printf("Training on %d samples.... Number of iteration = %d\n", dataset->n_samples, NUM_ITERATIONS);
-    
+float cross_entropy_loss(ForwardCache *cache, int true_label) {
+    float p = cache->a2[true_label];
+    if (p < 1e-8f) p = 1e-8f;
+    return -logf(p);
+}
+
+float evaluate_top1_accuracy_on_indices(FashionModel *model, Dataset *dataset, int *indices, int n) {
+    if (n <= 0) return 0.0f;
+
+    int correct = 0;
+    for (int i = 0; i < n; i++) {
+        int idx = indices[i];
+        int pred = predict(model, &dataset->X[idx * INPUT_SIZE]);
+        if (pred == (int)dataset->y[idx]) correct++;
+    }
+    return 100.0f * correct / n;
+}
+
+void train_model(FashionModel *model, Dataset *dataset,
+                 int *train_indices, int n_train,
+                 int *val_indices, int n_val) {
+    int *indices = (int*)malloc(n_train * sizeof(int));
+    for (int i = 0; i < n_train; i++) indices[i] = train_indices[i];
+
+    printf("Training on %d sample(s).... Number of iteration = %d\n", n_train, NUM_ITERATIONS);
+    if (n_val > 0) {
+        printf("Validation split active: %d sample(s)\n", n_val);
+    }
+
     for (int epoch = 0; epoch < NUM_ITERATIONS; epoch++) {
         float lr = LEARNING_RATE / (1.0 + LR_DECAY_RATE * epoch);
-        
-        shuffle_indices(indices, dataset->n_samples);
-        
-        for (int i = 0; i < dataset->n_samples; i++) {
+        float epoch_loss = 0.0f;
+        int epoch_correct = 0;
+
+        shuffle_indices(indices, n_train);
+
+        for (int i = 0; i < n_train; i++) {
             int idx = indices[i];
             float *x = &dataset->X[idx * INPUT_SIZE];
             int label = (int)dataset->y[idx];
-            
+
             ForwardCache *cache = forward_pass(model, x);
-            
+
+            int pred = 0;
+            for (int j = 1; j < OUTPUT_SIZE; j++) {
+                if (cache->a2[j] > cache->a2[pred]) pred = j;
+            }
+            if (pred == label) epoch_correct++;
+            epoch_loss += cross_entropy_loss(cache, label);
+
             backward_pass(model, cache, x, label, lr);
             free_cache(cache);
         }
-        
-        if ((epoch + 1) % 10 == 0) {
-            printf("Iteration....%d (lr=%.6f)\n", epoch + 1, lr);
+
+        if ((epoch + 1) % LOG_EVERY == 0 || epoch + 1 == NUM_ITERATIONS) {
+            float train_loss = epoch_loss / n_train;
+            float train_acc = 100.0f * epoch_correct / n_train;
+            printf("Iteration....%d (lr=%.6f) loss=%.4f train_acc=%.2f%%",
+                   epoch + 1, lr, train_loss, train_acc);
+
+            if (n_val > 0) {
+                float val_acc = evaluate_top1_accuracy_on_indices(model, dataset, val_indices, n_val);
+                printf(" val_acc=%.2f%%", val_acc);
+            }
+
+            printf("\n");
         }
     }
-    
+
     free(indices);
 }
 
@@ -330,23 +375,72 @@ int predict(FashionModel *model, float *x) {
     return best;
 }
 
+void top3_from_probs(float *probs, int *top1, int *top2, int *top3) {
+    *top1 = 0;
+    *top2 = 1;
+    *top3 = 2;
+
+    if (probs[*top2] > probs[*top1]) {
+        int tmp = *top1;
+        *top1 = *top2;
+        *top2 = tmp;
+    }
+    if (probs[*top3] > probs[*top2]) {
+        int tmp = *top2;
+        *top2 = *top3;
+        *top3 = tmp;
+    }
+    if (probs[*top2] > probs[*top1]) {
+        int tmp = *top1;
+        *top1 = *top2;
+        *top2 = tmp;
+    }
+
+    for (int i = 3; i < OUTPUT_SIZE; i++) {
+        if (probs[i] > probs[*top1]) {
+            *top3 = *top2;
+            *top2 = *top1;
+            *top1 = i;
+        } else if (probs[i] > probs[*top2]) {
+            *top3 = *top2;
+            *top2 = i;
+        } else if (probs[i] > probs[*top3]) {
+            *top3 = i;
+        }
+    }
+}
+
 void evaluate(FashionModel *model, Dataset *dataset) {
-    int correct = 0;
+    int top1_correct = 0;
+    int top2_correct = 0;
+    int top3_correct = 0;
     int per_class_correct[OUTPUT_SIZE] = {0};
     int per_class_total[OUTPUT_SIZE] = {0};
     
     for (int i = 0; i < dataset->n_samples; i++) {
         float *x = &dataset->X[i * INPUT_SIZE];
         int label = (int)dataset->y[i];
-        int pred = predict(model, x);
-        
-        if (pred == label) correct++;
-        per_class_correct[label] += (pred == label);
+
+        ForwardCache *cache = forward_pass(model, x);
+        int t1, t2, t3;
+        top3_from_probs(cache->a2, &t1, &t2, &t3);
+
+        if (t1 == label) top1_correct++;
+        if (t1 == label || t2 == label) top2_correct++;
+        if (t1 == label || t2 == label || t3 == label) top3_correct++;
+
+        per_class_correct[label] += (t1 == label);
         per_class_total[label]++;
+
+        free_cache(cache);
     }
     
-    printf("\nOverall accuracy: %d / %d = %.2f%%\n\n", correct, dataset->n_samples,
-           100.0 * correct / dataset->n_samples);
+    printf("\nTop-1 accuracy: %d / %d = %.2f%%\n", top1_correct, dataset->n_samples,
+           100.0 * top1_correct / dataset->n_samples);
+    printf("Top-2 accuracy: %d / %d = %.2f%%\n", top2_correct, dataset->n_samples,
+           100.0 * top2_correct / dataset->n_samples);
+    printf("Top-3 accuracy: %d / %d = %.2f%%\n\n", top3_correct, dataset->n_samples,
+           100.0 * top3_correct / dataset->n_samples);
     
     printf("Per-class accuracy:\n");
     for (int i = 0; i < OUTPUT_SIZE; i++) {
@@ -463,7 +557,8 @@ void usage() {
     printf("  ./fashion_model [--model <path>] test <csv> [n]       Test n samples\n");
     printf("  ./fashion_model [--model <path>] info                 Show model info\n\n");
     printf("Options:\n");
-    printf("  --model <path>     Model file path (default: %s)\n\n", DEFAULT_MODEL_PATH);
+    printf("  --model <path>     Model file path (default: %s)\n", DEFAULT_MODEL_PATH);
+    printf("  --val-split <f>    Holdout fraction for validation during training (e.g. 0.1)\n\n");
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -474,6 +569,7 @@ int main(int argc, char *argv[]) {
     srand(time(NULL));
 
     const char *model_path = DEFAULT_MODEL_PATH;
+    double val_split = 0.0;
     int cmd_idx = 1;
 
     while (cmd_idx < argc && strncmp(argv[cmd_idx], "--", 2) == 0) {
@@ -484,6 +580,22 @@ int main(int argc, char *argv[]) {
                 return 1;
             }
             model_path = argv[cmd_idx + 1];
+            cmd_idx += 2;
+            continue;
+        }
+
+        if (strcmp(argv[cmd_idx], "--val-split") == 0) {
+            if (cmd_idx + 1 >= argc) {
+                fprintf(stderr, "Missing value for --val-split\n\n");
+                usage();
+                return 1;
+            }
+            val_split = strtod(argv[cmd_idx + 1], NULL);
+            if (val_split < 0.0 || val_split >= 1.0) {
+                fprintf(stderr, "Invalid --val-split value: %s (expected 0.0 <= f < 1.0)\n\n", argv[cmd_idx + 1]);
+                usage();
+                return 1;
+            }
             cmd_idx += 2;
             continue;
         }
@@ -566,9 +678,30 @@ int main(int argc, char *argv[]) {
     }
     
     FashionModel *model = init_model();
-    train_model(model, dataset);
+
+    int *all_indices = (int*)malloc(dataset->n_samples * sizeof(int));
+    for (int i = 0; i < dataset->n_samples; i++) all_indices[i] = i;
+    shuffle_indices(all_indices, dataset->n_samples);
+
+    int n_val = (int)(dataset->n_samples * val_split);
+    if (n_val >= dataset->n_samples) n_val = dataset->n_samples - 1;
+    int n_train = dataset->n_samples - n_val;
+
+    int *val_indices = all_indices;
+    int *train_indices = &all_indices[n_val];
+
+    if (n_train <= 0) {
+        fprintf(stderr, "Validation split leaves no training samples. Reduce --val-split.\n");
+        free(all_indices);
+        free_dataset(dataset);
+        free_model(model);
+        return 1;
+    }
+
+    train_model(model, dataset, train_indices, n_train, val_indices, n_val);
     save_model(model, model_path);
     
+    free(all_indices);
     free_dataset(dataset);
     free_model(model);
     return 0;

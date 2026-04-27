@@ -68,11 +68,11 @@ Train the model on 60,000 Fashion-MNIST training samples:
 
 ```bash
 $ ./fashion_model
-Training on 60000 samples.... Number of iteration = 50
-Iteration....10 (lr=0.000999)
-Iteration....20 (lr=0.000998)
+Training on 60000 sample(s).... Number of iteration = 50
+Iteration....5 (lr=0.001000) loss=0.3112 train_acc=89.54%
+Iteration....10 (lr=0.001000) loss=0.2789 train_acc=90.87%
 ...
-Iteration....50 (lr=0.000980)
+Iteration....50 (lr=0.001000) loss=0.2104 train_acc=92.48%
 Training complete. Saving model to fashion_model.bin
 ```
 
@@ -84,6 +84,12 @@ Optional model path:
 $ ./fashion_model --model my_weights.bin
 ```
 
+Optional validation split during training:
+
+```bash
+$ ./fashion_model --val-split 0.1
+```
+
 ### Evaluation
 
 Evaluate on the full test set (10,000 samples):
@@ -92,7 +98,9 @@ Evaluate on the full test set (10,000 samples):
 $ ./fashion_model eval fashion_test.csv
 Evaluating model on 10000 samples from fashion_test.csv...
 
-Overall accuracy: 8921 / 10000 = 89.21%
+Top-1 accuracy: 8921 / 10000 = 89.21%
+Top-2 accuracy: 9520 / 10000 = 95.20%
+Top-3 accuracy: 9728 / 10000 = 97.28%
 
 Per-class accuracy:
   Class 0 (T-shirt/top):    880 /  1000 = 88.00%
