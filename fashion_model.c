@@ -3,6 +3,7 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
+#include <stdint.h>
 
 /* Fashion-MNIST Classifier
  * Classifies clothing/fashion items into 10 categories
@@ -17,20 +18,51 @@
  *   4: Coat             9: Ankle boot
  */
 
+#ifndef INPUT_SIZE
 #define INPUT_SIZE 784
+#endif
+
+#ifndef HIDDEN_UNITS
 #define HIDDEN_UNITS 32
+#endif
+
+#ifndef HIDDEN2_UNITS
+#define HIDDEN2_UNITS 0
+#endif
+
+#ifndef OUTPUT_SIZE
 #define OUTPUT_SIZE 10
+#endif
+
+#ifndef MAX_SAMPLES
 #define MAX_SAMPLES 70000
+#endif
+
+#ifndef NUM_ITERATIONS
 #define NUM_ITERATIONS 50
+#endif
+
+#ifndef LOG_EVERY
 #define LOG_EVERY 5
+#endif
+
+#ifndef LEARNING_RATE
 #define LEARNING_RATE 0.001
+#endif
+
+#ifndef LR_DECAY_RATE
 #define LR_DECAY_RATE 1e-5
-#define L2_LAMBDA 0.0
+#endif
+
+#define DEFAULT_L2_LAMBDA 0.0f
 #define DEFAULT_MODEL_PATH "fashion_model.bin"
+
+static float g_l2_lambda = DEFAULT_L2_LAMBDA;
 
 typedef struct {
     float *W1, *b1;  // Input → Hidden
-    float *W2, *b2;  // Hidden → Output
+    float *W2, *b2;  // Hidden1 → Hidden2 or Hidden1 → Output
+    float *W3, *b3;  // Hidden2 → Output (only used when HIDDEN2_UNITS > 0)
 } FashionModel;
 
 typedef struct {
@@ -117,15 +149,29 @@ FashionModel* init_model() {
     
     model->W1 = (float*)malloc(INPUT_SIZE * HIDDEN_UNITS * sizeof(float));
     model->b1 = (float*)calloc(HIDDEN_UNITS, sizeof(float));
-    
-    model->W2 = (float*)malloc(HIDDEN_UNITS * OUTPUT_SIZE * sizeof(float));
-    model->b2 = (float*)calloc(OUTPUT_SIZE, sizeof(float));
+
+    if (HIDDEN2_UNITS > 0) {
+        model->W2 = (float*)malloc(HIDDEN_UNITS * HIDDEN2_UNITS * sizeof(float));
+        model->b2 = (float*)calloc(HIDDEN2_UNITS, sizeof(float));
+        model->W3 = (float*)malloc(HIDDEN2_UNITS * OUTPUT_SIZE * sizeof(float));
+        model->b3 = (float*)calloc(OUTPUT_SIZE, sizeof(float));
+    } else {
+        model->W2 = (float*)malloc(HIDDEN_UNITS * OUTPUT_SIZE * sizeof(float));
+        model->b2 = (float*)calloc(OUTPUT_SIZE, sizeof(float));
+        model->W3 = NULL;
+        model->b3 = NULL;
+    }
     
     // He initialization for ReLU hidden layer
     he_init(model->W1, INPUT_SIZE, HIDDEN_UNITS);
-    
-    // Xavier for softmax output
-    xavier_init(model->W2, HIDDEN_UNITS, OUTPUT_SIZE);
+
+    if (HIDDEN2_UNITS > 0) {
+        he_init(model->W2, HIDDEN_UNITS, HIDDEN2_UNITS);
+        xavier_init(model->W3, HIDDEN2_UNITS, OUTPUT_SIZE);
+    } else {
+        // Xavier for softmax output
+        xavier_init(model->W2, HIDDEN_UNITS, OUTPUT_SIZE);
+    }
     
     return model;
 }
@@ -136,6 +182,8 @@ void free_model(FashionModel *model) {
         free(model->b1);
         free(model->W2);
         free(model->b2);
+        free(model->W3);
+        free(model->b3);
         free(model);
     }
 }
@@ -145,8 +193,9 @@ void free_model(FashionModel *model) {
 // ─────────────────────────────────────────────────────────────
 
 typedef struct {
-    float *z1, *a1;  // Hidden layer
-    float *z2, *a2;  // Output layer
+    float *z1, *a1;  // Hidden layer 1
+    float *z2, *a2;  // Hidden layer 2 (optional)
+    float *z3, *a3;  // Output layer
 } ForwardCache;
 
 ForwardCache* forward_pass(FashionModel *model, float *x) {
@@ -164,18 +213,45 @@ ForwardCache* forward_pass(FashionModel *model, float *x) {
         cache->a1[j] = relu(cache->z1[j]);
     }
     
-    cache->z2 = (float*)malloc(OUTPUT_SIZE * sizeof(float));
-    cache->a2 = (float*)malloc(OUTPUT_SIZE * sizeof(float));
-    
-    // Output layer: Softmax
-    for (int j = 0; j < OUTPUT_SIZE; j++) {
-        cache->z2[j] = model->b2[j];
-        for (int i = 0; i < HIDDEN_UNITS; i++) {
-            cache->z2[j] += model->W2[i * OUTPUT_SIZE + j] * cache->a1[i];
+    if (HIDDEN2_UNITS > 0) {
+        cache->z2 = (float*)malloc(HIDDEN2_UNITS * sizeof(float));
+        cache->a2 = (float*)malloc(HIDDEN2_UNITS * sizeof(float));
+
+        for (int j = 0; j < HIDDEN2_UNITS; j++) {
+            cache->z2[j] = model->b2[j];
+            for (int i = 0; i < HIDDEN_UNITS; i++) {
+                cache->z2[j] += model->W2[i * HIDDEN2_UNITS + j] * cache->a1[i];
+            }
+            cache->a2[j] = relu(cache->z2[j]);
         }
-        cache->a2[j] = cache->z2[j];
+
+        cache->z3 = (float*)malloc(OUTPUT_SIZE * sizeof(float));
+        cache->a3 = (float*)malloc(OUTPUT_SIZE * sizeof(float));
+
+        for (int j = 0; j < OUTPUT_SIZE; j++) {
+            cache->z3[j] = model->b3[j];
+            for (int i = 0; i < HIDDEN2_UNITS; i++) {
+                cache->z3[j] += model->W3[i * OUTPUT_SIZE + j] * cache->a2[i];
+            }
+            cache->a3[j] = cache->z3[j];
+        }
+        softmax(cache->a3, OUTPUT_SIZE);
+    } else {
+        cache->z2 = NULL;
+        cache->a2 = NULL;
+
+        cache->z3 = (float*)malloc(OUTPUT_SIZE * sizeof(float));
+        cache->a3 = (float*)malloc(OUTPUT_SIZE * sizeof(float));
+
+        for (int j = 0; j < OUTPUT_SIZE; j++) {
+            cache->z3[j] = model->b2[j];
+            for (int i = 0; i < HIDDEN_UNITS; i++) {
+                cache->z3[j] += model->W2[i * OUTPUT_SIZE + j] * cache->a1[i];
+            }
+            cache->a3[j] = cache->z3[j];
+        }
+        softmax(cache->a3, OUTPUT_SIZE);
     }
-    softmax(cache->a2, OUTPUT_SIZE);
     
     return cache;
 }
@@ -186,6 +262,8 @@ void free_cache(ForwardCache *cache) {
         free(cache->a1);
         free(cache->z2);
         free(cache->a2);
+        free(cache->z3);
+        free(cache->a3);
         free(cache);
     }
 }
@@ -198,42 +276,94 @@ void backward_pass(FashionModel *model, ForwardCache *cache, float *x, int true_
     // Output layer gradients (cross-entropy + softmax)
     float dz2[OUTPUT_SIZE];
     for (int i = 0; i < OUTPUT_SIZE; i++) {
-        dz2[i] = cache->a2[i];
+        dz2[i] = cache->a3[i];
         if (i == true_label) dz2[i] -= 1;
     }
-    
-    // Hidden layer gradients (use current W2 before any parameter updates)
-    float dz1[HIDDEN_UNITS];
-    for (int i = 0; i < HIDDEN_UNITS; i++) {
-        float grad_sum = 0;
-        for (int j = 0; j < OUTPUT_SIZE; j++) {
-            grad_sum += model->W2[i * OUTPUT_SIZE + j] * dz2[j];
-        }
-        dz1[i] = grad_sum * relu_derivative(cache->z1[i]);
-    }
 
-    // Update W2 and b2
-    for (int i = 0; i < HIDDEN_UNITS; i++) {
-        for (int j = 0; j < OUTPUT_SIZE; j++) {
-            float grad = cache->a1[i] * dz2[j] + L2_LAMBDA * model->W2[i * OUTPUT_SIZE + j];
-            model->W2[i * OUTPUT_SIZE + j] -= lr * grad;
+    if (HIDDEN2_UNITS > 0) {
+        float dz_hidden2[HIDDEN2_UNITS];
+        for (int i = 0; i < HIDDEN2_UNITS; i++) {
+            float grad_sum = 0.0f;
+            for (int j = 0; j < OUTPUT_SIZE; j++) {
+                grad_sum += model->W3[i * OUTPUT_SIZE + j] * dz2[j];
+            }
+            dz_hidden2[i] = grad_sum * relu_derivative(cache->z2[i]);
         }
-    }
 
-    for (int j = 0; j < OUTPUT_SIZE; j++) {
-        model->b2[j] -= lr * dz2[j];
-    }
-    
-    // Update W1 and b1
-    for (int i = 0; i < INPUT_SIZE; i++) {
+        float dz1[HIDDEN_UNITS];
+        for (int i = 0; i < HIDDEN_UNITS; i++) {
+            float grad_sum = 0.0f;
+            for (int j = 0; j < HIDDEN2_UNITS; j++) {
+                grad_sum += model->W2[i * HIDDEN2_UNITS + j] * dz_hidden2[j];
+            }
+            dz1[i] = grad_sum * relu_derivative(cache->z1[i]);
+        }
+
+        // Update W3 and b3
+        for (int i = 0; i < HIDDEN2_UNITS; i++) {
+            for (int j = 0; j < OUTPUT_SIZE; j++) {
+                float grad = cache->a2[i] * dz2[j] + g_l2_lambda * model->W3[i * OUTPUT_SIZE + j];
+                model->W3[i * OUTPUT_SIZE + j] -= lr * grad;
+            }
+        }
+        for (int j = 0; j < OUTPUT_SIZE; j++) {
+            model->b3[j] -= lr * dz2[j];
+        }
+
+        // Update W2 and b2
+        for (int i = 0; i < HIDDEN_UNITS; i++) {
+            for (int j = 0; j < HIDDEN2_UNITS; j++) {
+                float grad = cache->a1[i] * dz_hidden2[j] + g_l2_lambda * model->W2[i * HIDDEN2_UNITS + j];
+                model->W2[i * HIDDEN2_UNITS + j] -= lr * grad;
+            }
+        }
+        for (int j = 0; j < HIDDEN2_UNITS; j++) {
+            model->b2[j] -= lr * dz_hidden2[j];
+        }
+
+        // Update W1 and b1
+        for (int i = 0; i < INPUT_SIZE; i++) {
+            for (int j = 0; j < HIDDEN_UNITS; j++) {
+                float grad = x[i] * dz1[j] + g_l2_lambda * model->W1[i * HIDDEN_UNITS + j];
+                model->W1[i * HIDDEN_UNITS + j] -= lr * grad;
+            }
+        }
         for (int j = 0; j < HIDDEN_UNITS; j++) {
-            float grad = x[i] * dz1[j] + L2_LAMBDA * model->W1[i * HIDDEN_UNITS + j];
-            model->W1[i * HIDDEN_UNITS + j] -= lr * grad;
+            model->b1[j] -= lr * dz1[j];
         }
-    }
-    
-    for (int j = 0; j < HIDDEN_UNITS; j++) {
-        model->b1[j] -= lr * dz1[j];
+    } else {
+        float dz1[HIDDEN_UNITS];
+        for (int i = 0; i < HIDDEN_UNITS; i++) {
+            float grad_sum = 0;
+            for (int j = 0; j < OUTPUT_SIZE; j++) {
+                grad_sum += model->W2[i * OUTPUT_SIZE + j] * dz2[j];
+            }
+            dz1[i] = grad_sum * relu_derivative(cache->z1[i]);
+        }
+
+        // Update W2 and b2
+        for (int i = 0; i < HIDDEN_UNITS; i++) {
+            for (int j = 0; j < OUTPUT_SIZE; j++) {
+                float grad = cache->a1[i] * dz2[j] + g_l2_lambda * model->W2[i * OUTPUT_SIZE + j];
+                model->W2[i * OUTPUT_SIZE + j] -= lr * grad;
+            }
+        }
+
+        for (int j = 0; j < OUTPUT_SIZE; j++) {
+            model->b2[j] -= lr * dz2[j];
+        }
+
+        // Update W1 and b1
+        for (int i = 0; i < INPUT_SIZE; i++) {
+            for (int j = 0; j < HIDDEN_UNITS; j++) {
+                float grad = x[i] * dz1[j] + g_l2_lambda * model->W1[i * HIDDEN_UNITS + j];
+                model->W1[i * HIDDEN_UNITS + j] -= lr * grad;
+            }
+        }
+
+        for (int j = 0; j < HIDDEN_UNITS; j++) {
+            model->b1[j] -= lr * dz1[j];
+        }
     }
 }
 
@@ -292,7 +422,7 @@ void shuffle_indices(int *indices, int n) {
 // ─────────────────────────────────────────────────────────────
 
 float cross_entropy_loss(ForwardCache *cache, int true_label) {
-    float p = cache->a2[true_label];
+    float p = cache->a3[true_label];
     if (p < 1e-8f) p = 1e-8f;
     return -logf(p);
 }
@@ -336,7 +466,7 @@ void train_model(FashionModel *model, Dataset *dataset,
 
             int pred = 0;
             for (int j = 1; j < OUTPUT_SIZE; j++) {
-                if (cache->a2[j] > cache->a2[pred]) pred = j;
+                if (cache->a3[j] > cache->a3[pred]) pred = j;
             }
             if (pred == label) epoch_correct++;
             epoch_loss += cross_entropy_loss(cache, label);
@@ -371,7 +501,7 @@ int predict(FashionModel *model, float *x) {
     ForwardCache *cache = forward_pass(model, x);
     int best = 0;
     for (int i = 1; i < OUTPUT_SIZE; i++) {
-        if (cache->a2[i] > cache->a2[best]) best = i;
+        if (cache->a3[i] > cache->a3[best]) best = i;
     }
     free_cache(cache);
     return best;
@@ -425,7 +555,7 @@ void evaluate(FashionModel *model, Dataset *dataset) {
 
         ForwardCache *cache = forward_pass(model, x);
         int t1, t2, t3;
-        top3_from_probs(cache->a2, &t1, &t2, &t3);
+        top3_from_probs(cache->a3, &t1, &t2, &t3);
 
         if (t1 == label) top1_correct++;
         if (t1 == label || t2 == label) top2_correct++;
@@ -456,17 +586,47 @@ void evaluate(FashionModel *model, Dataset *dataset) {
 // Model Persistence
 // ─────────────────────────────────────────────────────────────
 
+typedef struct {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t input_size;
+    uint32_t hidden1_units;
+    uint32_t hidden2_units;
+    uint32_t output_size;
+} ModelHeader;
+
+#define MODEL_MAGIC 0x464D4F44u  // "FMOD"
+#define MODEL_VERSION 1u
+
 void save_model(FashionModel *model, const char *filename) {
     FILE *f = fopen(filename, "wb");
     if (!f) {
         perror("save_model");
         return;
     }
+
+    ModelHeader header;
+    header.magic = MODEL_MAGIC;
+    header.version = MODEL_VERSION;
+    header.input_size = INPUT_SIZE;
+    header.hidden1_units = HIDDEN_UNITS;
+    header.hidden2_units = HIDDEN2_UNITS;
+    header.output_size = OUTPUT_SIZE;
+
+    fwrite(&header, sizeof(ModelHeader), 1, f);
     
     fwrite(model->W1, sizeof(float), INPUT_SIZE * HIDDEN_UNITS, f);
     fwrite(model->b1, sizeof(float), HIDDEN_UNITS, f);
-    fwrite(model->W2, sizeof(float), HIDDEN_UNITS * OUTPUT_SIZE, f);
-    fwrite(model->b2, sizeof(float), OUTPUT_SIZE, f);
+
+    if (HIDDEN2_UNITS > 0) {
+        fwrite(model->W2, sizeof(float), HIDDEN_UNITS * HIDDEN2_UNITS, f);
+        fwrite(model->b2, sizeof(float), HIDDEN2_UNITS, f);
+        fwrite(model->W3, sizeof(float), HIDDEN2_UNITS * OUTPUT_SIZE, f);
+        fwrite(model->b3, sizeof(float), OUTPUT_SIZE, f);
+    } else {
+        fwrite(model->W2, sizeof(float), HIDDEN_UNITS * OUTPUT_SIZE, f);
+        fwrite(model->b2, sizeof(float), OUTPUT_SIZE, f);
+    }
     
     fclose(f);
     printf("Training complete. Saving model to %s\n", filename);
@@ -505,9 +665,10 @@ void save_model_metadata(const char *model_filename,
     fprintf(f, "log_every=%d\n", LOG_EVERY);
     fprintf(f, "learning_rate=%.6f\n", LEARNING_RATE);
     fprintf(f, "lr_decay=%.6f\n", LR_DECAY_RATE);
-    fprintf(f, "l2_lambda=%.6f\n", L2_LAMBDA);
+    fprintf(f, "l2_lambda=%.6f\n", g_l2_lambda);
     fprintf(f, "input_size=%d\n", INPUT_SIZE);
     fprintf(f, "hidden_units=%d\n", HIDDEN_UNITS);
+    fprintf(f, "hidden2_units=%d\n", HIDDEN2_UNITS);
     fprintf(f, "output_size=%d\n", OUTPUT_SIZE);
 
     fclose(f);
@@ -520,13 +681,48 @@ FashionModel* load_model_file(const char *filename) {
         perror("load_model");
         return NULL;
     }
+
+    ModelHeader header;
+    size_t nread = fread(&header, sizeof(ModelHeader), 1, f);
+    int has_header = (nread == 1 && header.magic == MODEL_MAGIC);
+
+    if (has_header) {
+        if (header.version != MODEL_VERSION ||
+            header.input_size != INPUT_SIZE ||
+            header.hidden1_units != HIDDEN_UNITS ||
+            header.hidden2_units != HIDDEN2_UNITS ||
+            header.output_size != OUTPUT_SIZE) {
+            fprintf(stderr,
+                    "Model architecture mismatch. File has [%u,%u,%u,%u], binary expects [%d,%d,%d,%d].\n",
+                    header.input_size, header.hidden1_units, header.hidden2_units, header.output_size,
+                    INPUT_SIZE, HIDDEN_UNITS, HIDDEN2_UNITS, OUTPUT_SIZE);
+            fclose(f);
+            return NULL;
+        }
+    } else {
+        // Backward compatibility: legacy format without header (single hidden layer only).
+        if (HIDDEN2_UNITS > 0) {
+            fprintf(stderr, "Legacy model format supports only single-hidden architecture.\n");
+            fclose(f);
+            return NULL;
+        }
+        rewind(f);
+    }
     
     FashionModel *model = init_model();
     
     fread(model->W1, sizeof(float), INPUT_SIZE * HIDDEN_UNITS, f);
     fread(model->b1, sizeof(float), HIDDEN_UNITS, f);
-    fread(model->W2, sizeof(float), HIDDEN_UNITS * OUTPUT_SIZE, f);
-    fread(model->b2, sizeof(float), OUTPUT_SIZE, f);
+
+    if (HIDDEN2_UNITS > 0) {
+        fread(model->W2, sizeof(float), HIDDEN_UNITS * HIDDEN2_UNITS, f);
+        fread(model->b2, sizeof(float), HIDDEN2_UNITS, f);
+        fread(model->W3, sizeof(float), HIDDEN2_UNITS * OUTPUT_SIZE, f);
+        fread(model->b3, sizeof(float), OUTPUT_SIZE, f);
+    } else {
+        fread(model->W2, sizeof(float), HIDDEN_UNITS * OUTPUT_SIZE, f);
+        fread(model->b2, sizeof(float), OUTPUT_SIZE, f);
+    }
     
     fclose(f);
     printf("Model successfully loaded from %s\n", filename);
@@ -538,11 +734,26 @@ FashionModel* load_model_file(const char *filename) {
 // ─────────────────────────────────────────────────────────────
 
 void print_model_card(const char *model_path, unsigned int seed, int seed_set, double val_split) {
+    int64_t params = (int64_t)INPUT_SIZE * HIDDEN_UNITS + HIDDEN_UNITS;
+    if (HIDDEN2_UNITS > 0) {
+        params += (int64_t)HIDDEN_UNITS * HIDDEN2_UNITS + HIDDEN2_UNITS;
+        params += (int64_t)HIDDEN2_UNITS * OUTPUT_SIZE + OUTPUT_SIZE;
+    } else {
+        params += (int64_t)HIDDEN_UNITS * OUTPUT_SIZE + OUTPUT_SIZE;
+    }
+
+    char arch_buf[64];
+    if (HIDDEN2_UNITS > 0) {
+        snprintf(arch_buf, sizeof(arch_buf), "784 -> %d -> %d -> 10", HIDDEN_UNITS, HIDDEN2_UNITS);
+    } else {
+        snprintf(arch_buf, sizeof(arch_buf), "784 -> %d -> 10", HIDDEN_UNITS);
+    }
+
     printf("\n╔════════════════════════════════════════════════════════════════╗\n");
     printf("║           FASHION-MNIST CLASSIFIER — Model Card               ║\n");
     printf("╠════════════════════════════════════════════════════════════════╣\n");
-    printf("║ Architecture:  784 → 32 → 10  (Fully Connected, ReLU+Softmax) ║\n");
-    printf("║ Parameters:    25450 total  (W1:25088 b1:32 | W2:320 b2:10)   ║\n");
+    printf("║ Architecture:  %-47s║\n", arch_buf);
+    printf("║ Parameters:    %-47lld║\n", (long long)params);
     printf("║ Training:      50 iterations, LR=0.0010 (with decay)          ║\n");
     printf("║ Dataset:       Fashion-MNIST (28×28px, 10 clothing classes)   ║\n");
     printf("║ Expected Acc:  ~92-94%% (harder than MNIST digits)             ║\n");
@@ -554,6 +765,7 @@ void print_model_card(const char *model_path, unsigned int seed, int seed_set, d
         printf("Config: seed=auto (time-based)\n");
     }
     printf("Config: val_split=%.3f\n\n", val_split);
+    printf("Config: l2=%.6f\n\n", g_l2_lambda);
 }
 
 void test_sample(FashionModel *model, Dataset *dataset, int idx) {
@@ -563,12 +775,12 @@ void test_sample(FashionModel *model, Dataset *dataset, int idx) {
     ForwardCache *cache = forward_pass(model, x);
     int pred = 0;
     for (int i = 1; i < OUTPUT_SIZE; i++) {
-        if (cache->a2[i] > cache->a2[pred]) pred = i;
+        if (cache->a3[i] > cache->a3[pred]) pred = i;
     }
     
     printf("Sample %d: True=%s, Predicted=%s (%.1f%%) %s\n",
            idx, fashion_labels[true_label], fashion_labels[pred],
-           100.0 * cache->a2[pred],
+           100.0 * cache->a3[pred],
            pred == true_label ? "✓" : "✗");
     
     free_cache(cache);
@@ -610,6 +822,7 @@ void usage() {
     printf("Options:\n");
     printf("  --model <path>     Model file path (default: %s)\n", DEFAULT_MODEL_PATH);
     printf("  --val-split <f>    Holdout fraction for validation during training (e.g. 0.1)\n");
+    printf("  --l2 <f>           L2 regularization strength (default: %.6f)\n", DEFAULT_L2_LAMBDA);
     printf("  --seed <n>         Fixed RNG seed for reproducible training\n\n");
 }
 
@@ -669,6 +882,26 @@ int main(int argc, char *argv[]) {
 
             seed = (unsigned int)parsed;
             seed_set = 1;
+            cmd_idx += 2;
+            continue;
+        }
+
+        if (strcmp(argv[cmd_idx], "--l2") == 0) {
+            if (cmd_idx + 1 >= argc) {
+                fprintf(stderr, "Missing value for --l2\n\n");
+                usage();
+                return 1;
+            }
+
+            char *endptr = NULL;
+            double parsed_l2 = strtod(argv[cmd_idx + 1], &endptr);
+            if (argv[cmd_idx + 1][0] == '\0' || (endptr && *endptr != '\0') || parsed_l2 < 0.0) {
+                fprintf(stderr, "Invalid --l2 value: %s (expected non-negative float)\n\n", argv[cmd_idx + 1]);
+                usage();
+                return 1;
+            }
+
+            g_l2_lambda = (float)parsed_l2;
             cmd_idx += 2;
             continue;
         }
