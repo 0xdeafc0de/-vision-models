@@ -1,0 +1,21 @@
+# Compiled binaries
+fashion_model
+*.o
+
+# Trained model weights
+model.bin
+
+# Dataset files (large, regenerated from setup.sh --data)
+fashion_train.csv
+fashion_test.csv
+*.gz
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
