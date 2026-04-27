@@ -46,6 +46,8 @@ const char *fashion_labels[] = {
 
 int predict(FashionModel *model, float *x);
 
+void print_model_card(const char *model_path, unsigned int seed, int seed_set, double val_split);
+
 // ─────────────────────────────────────────────────────────────
 // Activation Functions
 // ─────────────────────────────────────────────────────────────
@@ -470,6 +472,48 @@ void save_model(FashionModel *model, const char *filename) {
     printf("Training complete. Saving model to %s\n", filename);
 }
 
+void save_model_metadata(const char *model_filename,
+                         unsigned int seed,
+                         int seed_set,
+                         double val_split,
+                         int n_train,
+                         int n_val) {
+    char meta_path[1024];
+    snprintf(meta_path, sizeof(meta_path), "%s.meta.txt", model_filename);
+
+    FILE *f = fopen(meta_path, "w");
+    if (!f) {
+        perror("save_model_metadata");
+        return;
+    }
+
+    time_t now = time(NULL);
+    struct tm *tm_info = localtime(&now);
+    char ts[64] = "unknown";
+    if (tm_info) {
+        strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S %Z", tm_info);
+    }
+
+    fprintf(f, "model_path=%s\n", model_filename);
+    fprintf(f, "created_at=%s\n", ts);
+    fprintf(f, "seed=%u\n", seed);
+    fprintf(f, "seed_mode=%s\n", seed_set ? "fixed(--seed)" : "auto(time)");
+    fprintf(f, "train_samples=%d\n", n_train);
+    fprintf(f, "val_samples=%d\n", n_val);
+    fprintf(f, "val_split=%.4f\n", val_split);
+    fprintf(f, "iterations=%d\n", NUM_ITERATIONS);
+    fprintf(f, "log_every=%d\n", LOG_EVERY);
+    fprintf(f, "learning_rate=%.6f\n", LEARNING_RATE);
+    fprintf(f, "lr_decay=%.6f\n", LR_DECAY_RATE);
+    fprintf(f, "l2_lambda=%.6f\n", L2_LAMBDA);
+    fprintf(f, "input_size=%d\n", INPUT_SIZE);
+    fprintf(f, "hidden_units=%d\n", HIDDEN_UNITS);
+    fprintf(f, "output_size=%d\n", OUTPUT_SIZE);
+
+    fclose(f);
+    printf("Saved training metadata to %s\n", meta_path);
+}
+
 FashionModel* load_model_file(const char *filename) {
     FILE *f = fopen(filename, "rb");
     if (!f) {
@@ -493,7 +537,7 @@ FashionModel* load_model_file(const char *filename) {
 // Testing & Visualization
 // ─────────────────────────────────────────────────────────────
 
-void print_model_card() {
+void print_model_card(const char *model_path, unsigned int seed, int seed_set, double val_split) {
     printf("\n╔════════════════════════════════════════════════════════════════╗\n");
     printf("║           FASHION-MNIST CLASSIFIER — Model Card               ║\n");
     printf("╠════════════════════════════════════════════════════════════════╣\n");
@@ -503,6 +547,13 @@ void print_model_card() {
     printf("║ Dataset:       Fashion-MNIST (28×28px, 10 clothing classes)   ║\n");
     printf("║ Expected Acc:  ~92-94%% (harder than MNIST digits)             ║\n");
     printf("╚════════════════════════════════════════════════════════════════╝\n\n");
+    printf("Config: model=%s\n", model_path);
+    if (seed_set) {
+        printf("Config: seed=%u (fixed)\n", seed);
+    } else {
+        printf("Config: seed=auto (time-based)\n");
+    }
+    printf("Config: val_split=%.3f\n\n", val_split);
 }
 
 void test_sample(FashionModel *model, Dataset *dataset, int idx) {
@@ -558,7 +609,8 @@ void usage() {
     printf("  ./fashion_model [--model <path>] info                 Show model info\n\n");
     printf("Options:\n");
     printf("  --model <path>     Model file path (default: %s)\n", DEFAULT_MODEL_PATH);
-    printf("  --val-split <f>    Holdout fraction for validation during training (e.g. 0.1)\n\n");
+    printf("  --val-split <f>    Holdout fraction for validation during training (e.g. 0.1)\n");
+    printf("  --seed <n>         Fixed RNG seed for reproducible training\n\n");
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -566,10 +618,10 @@ void usage() {
 // ─────────────────────────────────────────────────────────────
 
 int main(int argc, char *argv[]) {
-    srand(time(NULL));
-
     const char *model_path = DEFAULT_MODEL_PATH;
     double val_split = 0.0;
+    unsigned int seed = 0;
+    int seed_set = 0;
     int cmd_idx = 1;
 
     while (cmd_idx < argc && strncmp(argv[cmd_idx], "--", 2) == 0) {
@@ -600,8 +652,29 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
+        if (strcmp(argv[cmd_idx], "--seed") == 0) {
+            if (cmd_idx + 1 >= argc) {
+                fprintf(stderr, "Missing value for --seed\n\n");
+                usage();
+                return 1;
+            }
+
+            char *endptr = NULL;
+            unsigned long parsed = strtoul(argv[cmd_idx + 1], &endptr, 10);
+            if (argv[cmd_idx + 1][0] == '\0' || (endptr && *endptr != '\0')) {
+                fprintf(stderr, "Invalid --seed value: %s\n\n", argv[cmd_idx + 1]);
+                usage();
+                return 1;
+            }
+
+            seed = (unsigned int)parsed;
+            seed_set = 1;
+            cmd_idx += 2;
+            continue;
+        }
+
         if (strcmp(argv[cmd_idx], "-h") == 0 || strcmp(argv[cmd_idx], "--help") == 0) {
-            print_model_card();
+            print_model_card(model_path, seed, seed_set, val_split);
             usage();
             return 0;
         }
@@ -610,10 +683,15 @@ int main(int argc, char *argv[]) {
         usage();
         return 1;
     }
+
+    if (!seed_set) {
+        seed = (unsigned int)time(NULL);
+    }
+    srand(seed);
     
     if (cmd_idx < argc) {
         if (strcmp(argv[cmd_idx], "info") == 0) {
-            print_model_card();
+            print_model_card(model_path, seed, seed_set, val_split);
             return 0;
         }
 
@@ -651,7 +729,7 @@ int main(int argc, char *argv[]) {
             int num_test = (cmd_idx + 2 < argc) ? atoi(argv[cmd_idx + 2]) : 10;
             if (num_test > dataset->n_samples) num_test = dataset->n_samples;
 
-            print_model_card();
+            print_model_card(model_path, seed, seed_set, val_split);
 
             printf("Testing %d sample(s)...\n\n", num_test);
             for (int i = 0; i < num_test; i++) {
@@ -700,6 +778,7 @@ int main(int argc, char *argv[]) {
 
     train_model(model, dataset, train_indices, n_train, val_indices, n_val);
     save_model(model, model_path);
+    save_model_metadata(model_path, seed, seed_set, val_split, n_train, n_val);
     
     free(all_indices);
     free_dataset(dataset);

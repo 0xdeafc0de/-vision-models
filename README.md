@@ -78,6 +78,8 @@ Training complete. Saving model to fashion_model.bin
 
 Output: `fashion_model.bin` (binary weights file)
 
+Training metadata sidecar: `fashion_model.bin.meta.txt`
+
 Optional model path:
 
 ```bash
@@ -88,6 +90,12 @@ Optional validation split during training:
 
 ```bash
 $ ./fashion_model --val-split 0.1
+```
+
+Optional fixed seed for reproducibility:
+
+```bash
+$ ./fashion_model --seed 42 --val-split 0.1
 ```
 
 ### Evaluation
@@ -206,6 +214,7 @@ vision-models/
   README.md            # This file
   fashion_model        # Compiled binary (created after build)
   fashion_model.bin    # Trained weights (created after training)
+  fashion_model.bin.meta.txt # Training config/seed sidecar (created after training)
   fashion_train.csv    # 60K training samples (created after download)
   fashion_test.csv     # 10K test samples (created after download)
 ```
