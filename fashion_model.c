@@ -461,63 +461,69 @@ void usage() {
 int main(int argc, char *argv[]) {
     srand(time(NULL));
     
-    if (argc < 2 || strcmp(argv[1], "-h") == 0) {
+    if (argc >= 2 && (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0)) {
         print_model_card();
         usage();
         return 0;
     }
-    
-    if (strcmp(argv[1], "info") == 0) {
-        print_model_card();
-        return 0;
-    }
-    
-    if (strcmp(argv[1], "eval") == 0) {
-        if (argc < 3) {
-            fprintf(stderr, "Usage: %s eval <csv_file>\n", argv[0]);
-            return 1;
+
+    if (argc >= 2) {
+        if (strcmp(argv[1], "info") == 0) {
+            print_model_card();
+            return 0;
         }
-        FashionModel *model = load_model_file("model.bin");
-        if (!model) return 1;
-        
-        Dataset *dataset = load_dataset(argv[2], MAX_SAMPLES);
-        if (!dataset) return 1;
-        
-        printf("Evaluating model on %d samples from %s...\n", dataset->n_samples, argv[2]);
-        evaluate(model, dataset);
-        
-        free_dataset(dataset);
-        free_model(model);
-        return 0;
-    }
-    
-    if (strcmp(argv[1], "test") == 0) {
-        if (argc < 3) {
-            fprintf(stderr, "Usage: %s test <csv_file> [num_samples]\n", argv[0]);
-            return 1;
+
+        if (strcmp(argv[1], "eval") == 0) {
+            if (argc < 3) {
+                fprintf(stderr, "Usage: %s eval <csv_file>\n", argv[0]);
+                return 1;
+            }
+            FashionModel *model = load_model_file("model.bin");
+            if (!model) return 1;
+
+            Dataset *dataset = load_dataset(argv[2], MAX_SAMPLES);
+            if (!dataset) return 1;
+
+            printf("Evaluating model on %d samples from %s...\n", dataset->n_samples, argv[2]);
+            evaluate(model, dataset);
+
+            free_dataset(dataset);
+            free_model(model);
+            return 0;
         }
-        
-        FashionModel *model = load_model_file("model.bin");
-        if (!model) return 1;
-        
-        Dataset *dataset = load_dataset(argv[2], MAX_SAMPLES);
-        if (!dataset) return 1;
-        
-        int num_test = (argc > 3) ? atoi(argv[3]) : 10;
-        if (num_test > dataset->n_samples) num_test = dataset->n_samples;
-        
-        print_model_card();
-        
-        printf("Testing %d sample(s)...\n\n", num_test);
-        for (int i = 0; i < num_test; i++) {
-            test_sample(model, dataset, i);
+
+        if (strcmp(argv[1], "test") == 0) {
+            if (argc < 3) {
+                fprintf(stderr, "Usage: %s test <csv_file> [num_samples]\n", argv[0]);
+                return 1;
+            }
+
+            FashionModel *model = load_model_file("model.bin");
+            if (!model) return 1;
+
+            Dataset *dataset = load_dataset(argv[2], MAX_SAMPLES);
+            if (!dataset) return 1;
+
+            int num_test = (argc > 3) ? atoi(argv[3]) : 10;
+            if (num_test > dataset->n_samples) num_test = dataset->n_samples;
+
+            print_model_card();
+
+            printf("Testing %d sample(s)...\n\n", num_test);
+            for (int i = 0; i < num_test; i++) {
+                test_sample(model, dataset, i);
+            }
+
+            confusion_matrix(model, dataset, num_test);
+
+            free_dataset(dataset);
+            free_model(model);
+            return 0;
         }
-        
-        confusion_matrix(model, dataset, num_test);
-        
-        free_dataset(dataset);
-        free_model(model);
-        return 0;
+
+        fprintf(stderr, "Unknown command: %s\n\n", argv[1]);
+        usage();
+        return 1;
     }
     
     // Default: train

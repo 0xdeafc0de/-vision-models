@@ -9,7 +9,7 @@
 
 set -euo pipefail
 
-MIRROR="https://ossci-datasets.s3.amazonaws.com/fashion-mnist"
+MIRROR="http://fashion-mnist.s3-website.eu-central-1.amazonaws.com"
 FILES=(
     "train-images-idx3-ubyte.gz"
     "train-labels-idx1-ubyte.gz"
@@ -102,7 +102,7 @@ run_tests() {
         log "────────────────────────────────────────────────────────────"
         log "Training model (this may take 1-2 minutes)..."
         log "────────────────────────────────────────────────────────────"
-        timeout 180 ./fashion_model || warn "Training timed out or failed"
+        ./fashion_model || warn "Training failed"
     fi
 
     if [[ -f model.bin && -f "$TEST_CSV" ]]; then
