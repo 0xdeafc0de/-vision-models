@@ -4,6 +4,7 @@ fashion_model
 
 # Trained model weights
 model.bin
+fashion_model.bin
 
 # Dataset files (large, regenerated from setup.sh --data)
 fashion_train.csv

@@ -31,7 +31,8 @@ $ ./setup.sh
 # Or step by step:
 $ ./setup.sh --data     # Download and convert to CSV
 $ ./setup.sh --build    # Compile fashion_model
-$ ./setup.sh --test     # Train and run evaluation
+$ ./setup.sh --train    # Train and save fashion_model.bin
+$ ./setup.sh --test     # Deterministic smoke checks (no retrain)
 ```
 
 ## Model Architecture
@@ -72,10 +73,16 @@ Iteration....10 (lr=0.000999)
 Iteration....20 (lr=0.000998)
 ...
 Iteration....50 (lr=0.000980)
-Training complete. Saving model to model.bin
+Training complete. Saving model to fashion_model.bin
 ```
 
-Output: `model.bin` (binary weights file)
+Output: `fashion_model.bin` (binary weights file)
+
+Optional model path:
+
+```bash
+$ ./fashion_model --model my_weights.bin
+```
 
 ### Evaluation
 
@@ -190,7 +197,7 @@ vision-models/
   setup.sh             # Dataset download + build automation
   README.md            # This file
   fashion_model        # Compiled binary (created after build)
-  model.bin            # Trained weights (created after training)
+  fashion_model.bin    # Trained weights (created after training)
   fashion_train.csv    # 60K training samples (created after download)
   fashion_test.csv     # 10K test samples (created after download)
 ```

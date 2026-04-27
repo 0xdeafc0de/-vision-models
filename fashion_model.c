@@ -25,6 +25,7 @@
 #define LEARNING_RATE 0.001
 #define LR_DECAY_RATE 1e-5
 #define L2_LAMBDA 0.0
+#define DEFAULT_MODEL_PATH "fashion_model.bin"
 
 typedef struct {
     float *W1, *b1;  // Input → Hidden
@@ -68,6 +69,15 @@ void softmax(float *x, int size) {
     for (int i = 0; i < size; i++) {
         x[i] = exp(x[i] - max);
         sum += x[i];
+    }
+
+    // Guard against non-finite normalization to avoid propagating NaNs.
+    if (!isfinite(sum) || sum <= 0.0f) {
+        float uniform = 1.0f / size;
+        for (int i = 0; i < size; i++) {
+            x[i] = uniform;
+        }
+        return;
     }
     
     for (int i = 0; i < size; i++) {
@@ -187,19 +197,7 @@ void backward_pass(FashionModel *model, ForwardCache *cache, float *x, int true_
         if (i == true_label) dz2[i] -= 1;
     }
     
-    // Update W2 and b2
-    for (int i = 0; i < HIDDEN_UNITS; i++) {
-        for (int j = 0; j < OUTPUT_SIZE; j++) {
-            float grad = cache->a1[i] * dz2[j] + L2_LAMBDA * model->W2[i * OUTPUT_SIZE + j];
-            model->W2[i * OUTPUT_SIZE + j] -= lr * grad;
-        }
-    }
-    
-    for (int j = 0; j < OUTPUT_SIZE; j++) {
-        model->b2[j] -= lr * dz2[j];
-    }
-    
-    // Hidden layer gradients
+    // Hidden layer gradients (use current W2 before any parameter updates)
     float dz1[HIDDEN_UNITS];
     for (int i = 0; i < HIDDEN_UNITS; i++) {
         float grad_sum = 0;
@@ -207,6 +205,18 @@ void backward_pass(FashionModel *model, ForwardCache *cache, float *x, int true_
             grad_sum += model->W2[i * OUTPUT_SIZE + j] * dz2[j];
         }
         dz1[i] = grad_sum * relu_derivative(cache->z1[i]);
+    }
+
+    // Update W2 and b2
+    for (int i = 0; i < HIDDEN_UNITS; i++) {
+        for (int j = 0; j < OUTPUT_SIZE; j++) {
+            float grad = cache->a1[i] * dz2[j] + L2_LAMBDA * model->W2[i * OUTPUT_SIZE + j];
+            model->W2[i * OUTPUT_SIZE + j] -= lr * grad;
+        }
+    }
+
+    for (int j = 0; j < OUTPUT_SIZE; j++) {
+        model->b2[j] -= lr * dz2[j];
     }
     
     // Update W1 and b1
@@ -299,7 +309,7 @@ void train_model(FashionModel *model, Dataset *dataset) {
         }
         
         if ((epoch + 1) % 10 == 0) {
-            printf("Iteration....%d (lr=%.6f)\n", epoch, lr);
+            printf("Iteration....%d (lr=%.6f)\n", epoch + 1, lr);
         }
     }
     
@@ -448,10 +458,12 @@ void confusion_matrix(FashionModel *model, Dataset *dataset, int num_samples) {
 void usage() {
     printf("Fashion-MNIST Classifier\n\n");
     printf("Usage:\n");
-    printf("  ./fashion_model                      Train on fashion_train.csv\n");
-    printf("  ./fashion_model eval <csv>           Evaluate on dataset\n");
-    printf("  ./fashion_model test <csv> [n]       Test n samples\n");
-    printf("  ./fashion_model info                 Show model info\n\n");
+    printf("  ./fashion_model [--model <path>]                      Train on fashion_train.csv\n");
+    printf("  ./fashion_model [--model <path>] eval <csv>           Evaluate on dataset\n");
+    printf("  ./fashion_model [--model <path>] test <csv> [n]       Test n samples\n");
+    printf("  ./fashion_model [--model <path>] info                 Show model info\n\n");
+    printf("Options:\n");
+    printf("  --model <path>     Model file path (default: %s)\n\n", DEFAULT_MODEL_PATH);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -460,31 +472,51 @@ void usage() {
 
 int main(int argc, char *argv[]) {
     srand(time(NULL));
-    
-    if (argc >= 2 && (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0)) {
-        print_model_card();
-        usage();
-        return 0;
-    }
 
-    if (argc >= 2) {
-        if (strcmp(argv[1], "info") == 0) {
+    const char *model_path = DEFAULT_MODEL_PATH;
+    int cmd_idx = 1;
+
+    while (cmd_idx < argc && strncmp(argv[cmd_idx], "--", 2) == 0) {
+        if (strcmp(argv[cmd_idx], "--model") == 0) {
+            if (cmd_idx + 1 >= argc) {
+                fprintf(stderr, "Missing value for --model\n\n");
+                usage();
+                return 1;
+            }
+            model_path = argv[cmd_idx + 1];
+            cmd_idx += 2;
+            continue;
+        }
+
+        if (strcmp(argv[cmd_idx], "-h") == 0 || strcmp(argv[cmd_idx], "--help") == 0) {
+            print_model_card();
+            usage();
+            return 0;
+        }
+
+        fprintf(stderr, "Unknown option: %s\n\n", argv[cmd_idx]);
+        usage();
+        return 1;
+    }
+    
+    if (cmd_idx < argc) {
+        if (strcmp(argv[cmd_idx], "info") == 0) {
             print_model_card();
             return 0;
         }
 
-        if (strcmp(argv[1], "eval") == 0) {
-            if (argc < 3) {
-                fprintf(stderr, "Usage: %s eval <csv_file>\n", argv[0]);
+        if (strcmp(argv[cmd_idx], "eval") == 0) {
+            if (cmd_idx + 1 >= argc) {
+                fprintf(stderr, "Usage: %s [--model <path>] eval <csv_file>\n", argv[0]);
                 return 1;
             }
-            FashionModel *model = load_model_file("model.bin");
+            FashionModel *model = load_model_file(model_path);
             if (!model) return 1;
 
-            Dataset *dataset = load_dataset(argv[2], MAX_SAMPLES);
+            Dataset *dataset = load_dataset(argv[cmd_idx + 1], MAX_SAMPLES);
             if (!dataset) return 1;
 
-            printf("Evaluating model on %d samples from %s...\n", dataset->n_samples, argv[2]);
+            printf("Evaluating model on %d samples from %s...\n", dataset->n_samples, argv[cmd_idx + 1]);
             evaluate(model, dataset);
 
             free_dataset(dataset);
@@ -492,19 +524,19 @@ int main(int argc, char *argv[]) {
             return 0;
         }
 
-        if (strcmp(argv[1], "test") == 0) {
-            if (argc < 3) {
-                fprintf(stderr, "Usage: %s test <csv_file> [num_samples]\n", argv[0]);
+        if (strcmp(argv[cmd_idx], "test") == 0) {
+            if (cmd_idx + 1 >= argc) {
+                fprintf(stderr, "Usage: %s [--model <path>] test <csv_file> [num_samples]\n", argv[0]);
                 return 1;
             }
 
-            FashionModel *model = load_model_file("model.bin");
+            FashionModel *model = load_model_file(model_path);
             if (!model) return 1;
 
-            Dataset *dataset = load_dataset(argv[2], MAX_SAMPLES);
+            Dataset *dataset = load_dataset(argv[cmd_idx + 1], MAX_SAMPLES);
             if (!dataset) return 1;
 
-            int num_test = (argc > 3) ? atoi(argv[3]) : 10;
+            int num_test = (cmd_idx + 2 < argc) ? atoi(argv[cmd_idx + 2]) : 10;
             if (num_test > dataset->n_samples) num_test = dataset->n_samples;
 
             print_model_card();
@@ -521,7 +553,7 @@ int main(int argc, char *argv[]) {
             return 0;
         }
 
-        fprintf(stderr, "Unknown command: %s\n\n", argv[1]);
+        fprintf(stderr, "Unknown command: %s\n\n", argv[cmd_idx]);
         usage();
         return 1;
     }
@@ -535,7 +567,7 @@ int main(int argc, char *argv[]) {
     
     FashionModel *model = init_model();
     train_model(model, dataset);
-    save_model(model, "model.bin");
+    save_model(model, model_path);
     
     free_dataset(dataset);
     free_model(model);
