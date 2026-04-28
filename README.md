@@ -1,6 +1,6 @@
 # Vision Models: Fashion-MNIST Classification
 
-A continuation of the [perceptron learning project](../perceptron), exploring how neural networks generalize to different image classification tasks. This repository demonstrates that the same architecture and training techniques work across different domains — from MNIST digits to fashion items.
+A continuation of the [perceptron learning project](https://github.com/0xdeafc0de/perceptron), exploring how neural networks generalize to different image classification tasks. This repository demonstrates that the same architecture and training techniques work across different domains — from MNIST digits to fashion items.
 
 **Key Question**: Does a model trained on handwritten digits generalize to clothing items?
 
